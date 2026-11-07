@@ -1,7 +1,6 @@
 import os
 import re
 import random
-import base64
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
@@ -11,53 +10,43 @@ def obfuscate_code_string(code):
     code = re.sub(r'--\[\[.*?\]\]', '', code, flags=re.DOTALL)
     code = re.sub(r'--.*$', '', code, flags=re.MULTILINE)
 
-    # Encrypt strings
-    key = random.randint(10, 250)
-    def encrypt_match(match):
-        s = match.group(1)
-        encrypted = ''.join(chr(ord(c) ^ key) for c in s)
-        b64 = base64.b64encode(encrypted.encode('latin1')).decode('ascii')
-        return f'_dec("{b64}", {key})'
+    # Generate dynamic random key
+    key = random.randint(15, 240)
+    
+    # Convert code to XOR encrypted byte list
+    bytes_list = []
+    for c in code:
+        b = ord(c) ^ key
+        bytes_list.append(str(b))
+    
+    bytes_str = ", ".join(bytes_list)
 
-    code_encrypted = re.sub(r'"([^"\\]*(?:\\.[^"\\]*)*)"', encrypt_match, code)
-    code_encrypted = re.sub(r"'([^'\\]*(?:\\.[^'\\]*)*)'", encrypt_match, code_encrypted)
-
-    # Variable renaming / identifier mangling
-    identifiers = set(re.findall(r'\b(?:local\s+([a-zA-Z_][a-zA-Z0-9_]*))', code_encrypted))
-    rename_map = {}
-    for idx, ident in enumerate(identifiers):
-        if ident not in ['print', 'math', 'string', 'table', 'load', 'bit32']:
-            rename_map[ident] = f"_0x{random.randint(1000, 9999):x}_{idx}"
-
-    for old, new in rename_map.items():
-        code_encrypted = re.sub(r'\b' + old + r'\b', new, code_encrypted)
-
-    # Wrap in runtime decoder stub
-    final_payload = f'''-- Obfuscated via Ollie's Cloud Obfuscator GUI
-local function _dec(b64, k)
-    local b = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    local s = (b64:gsub('[^%w%+%%/=]', ''))
-    local r = {{}}
-    for i = 1, #s, 4 do
-        local a, b_val, c, d = b:find(s:sub(i,i)), b:find(s:sub(i+1,i+1)), b:find(s:sub(i+2,i+2)), b:find(s:sub(i+3,i+3))
-        local n = (a-1)*262144 + (b_val-1)*4096 + ((c or 1)-1)*64 + ((d or 1)-1)
-        local t1, t2, t3 = math.floor(n/65536)%256, math.floor(n/256)%256, n%256
-        table.insert(r, string.char(t1))
-        if c then table.insert(r, string.char(t2)) end
-        if d then table.insert(r, string.char(t3)) end
+    # Bulletproof runtime decoding stub using raw byte arrays
+    final_payload = f'''-- Obfuscated via Ollie's Secure Cloud Obfuscator
+local function _run()
+    local _b = {{{bytes_str}}}
+    local _k = {key}
+    local _r = {{}}
+    
+    local function _bx(a, b)
+        if bit32 and bit32.bxor then return bit32.bxor(a, b) end
+        if bit and bit.bxor then return bit.bxor(a, b) end
+        return a ~ b
     end
-    local raw = table.concat(r)
-    local res = {{}}
-    for i = 1, #raw do
-        res[i] = string.char(bit32 and bit32.bxor(raw:byte(i), k) or (raw:byte(i) ~ k))
+    
+    for _i = 1, #_b do
+        _r[_i] = string.char(_bx(_b[_i], _k))
     end
-    return table.concat(res)
+    
+    local _code = table.concat(_r)
+    local _f, _err = (loadstring or load)(_code)
+    if _f then
+        return _f()
+    else
+        error("Obfuscation load error: " .. tostring(_err))
+    end
 end
-
-local function _exec()
-    {code_encrypted}
-end
-_exec()
+_run()
 '''
     return final_payload
 
