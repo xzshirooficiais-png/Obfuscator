@@ -1,5 +1,9 @@
-import random
+import os
 import re
+import random
+from flask import Flask, request, jsonify, Response
+
+app = Flask(__name__)
 
 def build_advanced_vm(source_code):
     # 1. Clean comments and dead padding
@@ -12,49 +16,41 @@ def build_advanced_vm(source_code):
     op_exec = random.randint(86, 130)
     op_halt = random.randint(200, 254)
 
-    # 3. Constant Splitting (Chunks string to defeat monolithic memory scans)
+    # 3. Constant Splitting
     chunk_size = random.randint(4, 8)
     chunks = [source_code[i:i+chunk_size] for i in range(0, len(source_code), chunk_size)]
     
     # 4. Generate Raw Instruction Sequence
-    # Sequence: LOADK chunks into registers, CONCAT them, EXEC, HALT
     instructions = []
     for idx, _ in enumerate(chunks):
-        instructions.extend([op_loadk, idx + 1, idx + 1]) # OP, Reg, ConstIdx
+        instructions.extend([op_loadk, idx + 1, idx + 1])
     
-    instructions.extend([op_concat, len(chunks)]) # OP, TotalChunks
-    instructions.extend([op_exec, 1])            # OP, TargetReg
-    instructions.extend([op_halt, 0])            # OP, Padding
+    instructions.extend([op_concat, len(chunks)])
+    instructions.extend([op_exec, 1])
+    instructions.extend([op_halt, 0])
 
-    # 5. Rolling-Cipher Bytecode Encryption (Each byte's key depends on previous byte)
+    # 5. Rolling-Cipher Bytecode Encryption
     initial_seed = random.randint(20, 220)
-    multiplier = random.randint(3, 11) * 2 + 1 # odd multiplier for full ring
+    multiplier = random.randint(3, 11) * 2 + 1
     
     encrypted_bytes = []
     current_key = initial_seed
     for b in instructions:
         enc_b = b ^ (current_key & 0xFF)
         encrypted_bytes.append(enc_b)
-        # Mutate rolling state
         current_key = (current_key * multiplier + b + 17) & 0xFF
 
     # 6. Build the Hardened Lua VM Engine
-    engine_payload = f'''-- [ OLLIE NEXT-GEN VIRTUAL MACHINE ]
--- Hardened against memory dumps and detours
-
+    engine_payload = f'''-- [ OLLIE ADVANCED LURAPH-KILLER VM ]
 local function _init_guard()
-    -- Anti-Hook / Anti-Dump Integrity Shield
     local _tostring = tostring
     local _pcall = pcall
-    
-    -- Detect if core execution hooks are tampered
     local function _check_closure(fn)
         local str = _tostring(fn)
         return str:find("builtin") or str:find("native") or str:find("function: 0x") or str:find("function: [A-Za-z0-9]")
     end
-    
     if not _check_closure(pcall) or not _check_closure(tostring) then
-        while true do end -- Infinite lock on hook detection
+        while true do end
     end
 end
 _init_guard()
@@ -65,7 +61,6 @@ local function _dispatch()
     local _state_key = {initial_seed}
     local _mult = {multiplier}
     
-    -- Virtual CPU registers
     local _registers = {{}}
     local _accumulator = {{}}
     local _ip = 1
@@ -81,9 +76,7 @@ local function _dispatch()
         return a ~ b
     end
     
-    -- Execution State Dispatcher (Flattened loop)
     while _ip <= #_bc do
-        -- Decrypt byte using current rolling cipher state
         local _enc_byte = _bc[_ip]
         local _op = _bx(_enc_byte, _state_key % 256)
         _state_key = (_state_key * _mult + _op + 17) % 256
@@ -125,7 +118,6 @@ local function _dispatch()
         elseif _op == OP_HALT then
             break
         else
-            -- Opaque panic trap
             while true do end
         end
     end
@@ -135,6 +127,97 @@ _dispatch()
 '''
     return engine_payload
 
-if __name__ == "__main__":
-    sample = "print('Virtualization running past Luraph standards!')"
-    print(build_advanced_vm(sample))
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Lua VM Obfuscator</title>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; margin: 0; }
+        .container { max-width: 900px; margin: auto; }
+        h1 { color: #58a6ff; text-align: center; font-size: 1.8rem; }
+        .pane-group { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 20px; }
+        .pane { flex: 1; min-width: 320px; display: flex; flex-direction: column; }
+        label { margin-bottom: 8px; font-weight: bold; color: #8b949e; }
+        textarea { width: 100%; height: 350px; background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 14px; resize: vertical; box-sizing: border-box; }
+        textarea:focus { border-color: #58a6ff; outline: none; }
+        button { background-color: #238636; color: white; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 15px; width: 100%; }
+        button:hover { background-color: #2ea043; }
+        .status { text-align: center; margin-top: 10px; color: #f0883e; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ADVANCED ROLLING-CIPHER VM OBFUSCATOR</h1>
+        <div class="pane-group">
+            <div class="pane">
+                <label for="inputCode">Raw Script Input:</label>
+                <textarea id="inputCode" placeholder="Paste your raw Lua script here..."></textarea>
+            </div>
+            <div class="pane">
+                <label for="outputCode">Hardened Bytecode VM Output:</label>
+                <textarea id="outputCode" placeholder="Obfuscated VM code will appear here..." readonly></textarea>
+            </div>
+        </div>
+        <button onclick="obfuscateScript()">VIRTUALIZE SCRIPT</button>
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        async function obfuscateScript() {
+            const code = document.getElementById('inputCode').value;
+            const status = document.getElementById('status');
+            const outputBox = document.getElementById('outputCode');
+
+            if (!code.trim()) {
+                status.innerText = "Error: Input box is empty!";
+                return;
+            }
+
+            status.innerText = "Encrypting instructions into rolling-cipher VM...";
+            outputBox.value = "";
+
+            try {
+                const response = await fetch('/obfuscate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    outputBox.value = data.obfuscated;
+                    status.innerText = "Success! Hardened VM generated.";
+                } else {
+                    status.innerText = "Error: " + (data.error || "Unknown error");
+                }
+            } catch (err) {
+                status.innerText = "Network Error: Failed to reach server.";
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def home():
+    return Response(HTML_PAGE, mimetype='text/html')
+
+@app.route('/obfuscate', methods=['POST'])
+def api_obfuscate():
+    data = request.get_json(silent=True) or request.form
+    code = data.get('code', '')
+    if not code:
+        return jsonify({"error": "No Lua code provided"}), 400
+    
+    try:
+        protected = build_advanced_vm(code)
+        return jsonify({"success": True, "obfuscated": protected})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
