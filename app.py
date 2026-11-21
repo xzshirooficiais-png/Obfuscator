@@ -1,36 +1,83 @@
-from flask import Flask, render_template, request, jsonify
-import urllib.parse
-import re
+from flask import Flask, render_template_string, request, jsonify
 import urllib.request
-import json
+import re
 
 app = Flask(__name__)
 
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Bypasser</title>
+    <style>
+        body { background: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif; display: flex; height: 100vh; justify-content: center; align-items: center; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 100%; max-width: 500px; }
+        h2 { margin-top: 0; color: #38bdf8; }
+        input { width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; margin-bottom: 1rem; box-sizing: border-box; }
+        button { background: #0284c7; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+        button:hover { background: #0369a1; }
+        .result { margin-top: 1.5rem; word-break: break-all; background: #0f172a; padding: 1rem; border-radius: 6px; border: 1px solid #334155; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Link Bypasser</h2>
+        <input type="text" id="urlInput" placeholder="Paste Linkvertise or short link here...">
+        <button onclick="bypassLink()">Start Bypass</button>
+        <div class="result" id="resultBox"></div>
+    </div>
+
+    <script>
+        async function bypassLink() {
+            const url = document.getElementById('urlInput').value;
+            const resultBox = document.getElementById('resultBox');
+            if(!url) return;
+            
+            resultBox.style.display = 'block';
+            resultBox.innerHTML = 'Processing...';
+
+            try {
+                const res = await fetch('/api/bypass', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if(data.bypassed) {
+                    resultBox.innerHTML = `<strong>Result:</strong> <a href="${data.bypassed}" target="_blank" style="color: #38bdf8;">${data.bypassed}</a>`;
+                } else {
+                    resultBox.innerHTML = `<strong>Error:</strong> ${data.error || 'Failed to resolve'}`;
+                }
+            } catch (err) {
+                resultBox.innerHTML = `<strong>Error:</strong> Network request failed.`;
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
 def resolve_link(target_url):
     try:
-        # Basic resolution logic for common trackers/shorteners
         req = urllib.request.Request(
             target_url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-        
-        # If it's a known service pattern, integrate backend logic or fallback to redirect chain following
         with urllib.request.urlopen(req, timeout=10) as response:
             final_url = response.url
             html_content = response.read().decode('utf-8', errors='ignore')
-            
-            # Look for common meta refresh redirects or window.location patterns in ad gates
             match = re.search(r'window\.location\.href\s*=\s*["\']([^"\']+)["\']', html_content)
             if match:
                 return match.group(1)
-                
             return final_url
     except Exception as e:
         return f"Error resolving link: {str(e)}"
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template_string(HTML_TEMPLATE)
 
 @app.route('/api/bypass', methods=['POST'])
 def bypass():
@@ -38,7 +85,6 @@ def bypass():
     url = data.get('url', '').strip()
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
-        
     resolved = resolve_link(url)
     return jsonify({'original': url, 'bypassed': resolved})
 
