@@ -62,26 +62,39 @@ HTML_TEMPLATE = """
 
 def query_bypass_vip(target_url):
     try:
-        # Public bypass.vip free query interface layout
         api_endpoint = f"https://bypass.vip/api/free?url={urllib.parse.quote(target_url)}"
         req = urllib.request.Request(
             api_endpoint,
             headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*'
             }
         )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            # Check standard response structure for bypass.vip
-            if res_data.get('status') == 'success' or res_data.get('result'):
-                return res_data.get('result') or res_data.get('destination')
-            elif 'url' in res_data:
-                return res_data['url']
-            else:
-                return f"API Response: {res_data.get('message', 'Unknown error format')}"
+        with urllib.request.urlopen(req, timeout=12) as response:
+            raw_body = response.read().decode('utf-8', errors='ignore')
+            if not raw_body.strip():
+                return "Error: Received empty response from bypass engine."
+            
+            try:
+                res_data = json.loads(raw_body)
+            except json.JSONDecodeError:
+                return f"Error: Non-JSON response block returned: {raw_body[:100]}"
+            
+            if isinstance(res_data, dict):
+                if res_data.get('status') == 'success':
+                    return res_data.get('result') or res_data.get('destination')
+                elif 'result' in res_data:
+                    return res_data['result']
+                elif 'destination' in res_data:
+                    return res_data['destination']
+                elif 'url' in res_data:
+                    return res_data['url']
+                elif 'message' in res_data:
+                    return f"API Message: {res_data['message']}"
+            
+            return f"Unexpected response layout: {raw_body}"
     except Exception as e:
-        return f"Resolution error: {str(e)}"
+        return f"Resolution connection error: {str(e)}"
 
 @app.route('/')
 def index():
