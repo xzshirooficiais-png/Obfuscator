@@ -1,47 +1,101 @@
-// ==UserScript==
-// @name         Ollie Link Unroller
-// @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Bypass ad gates and shorteners client-side
-// @match        *://links.lootlabs.gg/*
-// @match        *://*.linkvertise.com/*
-// @match        *://*.work.ink/*
-// @run-at       document-start
-// @grant        none
-// ==/UserScript==
+from flask import Flask, render_template_string, request, jsonify
+import urllib.request
+import urllib.parse
+import json
 
-(function() {
-    'use strict';
-    
-    console.log("[Ollie Bypasser] Active on target gate.");
+app = Flask(__name__)
 
-    function extractDestination() {
-        const urlParams = new URLSearchParams(window.location.search);
-        
-        // 1. LootLabs Base64 'cc' parameter un-shielding
-        if (urlParams.has('cc')) {
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Bypasser</title>
+    <style>
+        body { background: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif; display: flex; height: 100vh; justify-content: center; align-items: center; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 100%; max-width: 500px; }
+        h2 { margin-top: 0; color: #38bdf8; }
+        input { width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; margin-bottom: 1rem; box-sizing: border-box; }
+        button { background: #0284c7; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+        button:hover { background: #0369a1; }
+        .result { margin-top: 1.5rem; word-break: break-all; background: #0f172a; padding: 1rem; border-radius: 6px; border: 1px solid #334155; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Link Bypasser</h2>
+        <input type="text" id="urlInput" placeholder="Paste LootLabs, Linkvertise link here...">
+        <button onclick="bypassLink()">Start Bypass</button>
+        <div class="result" id="resultBox"></div>
+    </div>
+
+    <script>
+        async function bypassLink() {
+            const url = document.getElementById('urlInput').value;
+            const resultBox = document.getElementById('resultBox');
+            if(!url) return;
+            
+            resultBox.style.display = 'block';
+            resultBox.innerHTML = 'Querying Bypass Engine...';
+
             try {
-                let base64Val = urlParams.get('cc');
-                let decoded = atob(base64Val);
-                let json = JSON.parse(decoded);
-                if (json.url) {
-                    window.location.replace(json.url);
-                    return;
+                const res = await fetch('/api/bypass', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if(data.bypassed) {
+                    resultBox.innerHTML = `<strong>Result:</strong> <a href="${data.bypassed}" target="_blank" style="color: #38bdf8;">${data.bypassed}</a>`;
+                } else {
+                    resultBox.innerHTML = `<strong>Error:</strong> ${data.error || 'Failed to resolve link'}`;
                 }
-            } catch(e) {}
-        }
-
-        // 2. Generic DOM target scraping
-        let scripts = document.querySelectorAll('script');
-        for (let s of scripts) {
-            let text = s.innerText;
-            let match = text.match(/["']destination["']\s*:\s*["'](https?:\/\/[^"']+)["']/);
-            if (match && match[1]) {
-                window.location.replace(match[1]);
-                return;
+            } catch (err) {
+                resultBox.innerHTML = `<strong>Error:</strong> Network request failed.`;
             }
         }
-    }
+    </script>
+</body>
+</html>
+"""
 
-    window.addEventListener('DOMContentLoaded', extractDestination);
-})();
+def query_bypass_vip(target_url):
+    try:
+        # Public bypass.vip free query interface layout
+        api_endpoint = f"https://bypass.vip/api/free?url={urllib.parse.quote(target_url)}"
+        req = urllib.request.Request(
+            api_endpoint,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
+            }
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            # Check standard response structure for bypass.vip
+            if res_data.get('status') == 'success' or res_data.get('result'):
+                return res_data.get('result') or res_data.get('destination')
+            elif 'url' in res_data:
+                return res_data['url']
+            else:
+                return f"API Response: {res_data.get('message', 'Unknown error format')}"
+    except Exception as e:
+        return f"Resolution error: {str(e)}"
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/bypass', methods=['POST'])
+def bypass():
+    data = request.get_json()
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
+    
+    resolved = query_bypass_vip(url)
+    return jsonify({'original': url, 'bypassed': resolved})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
