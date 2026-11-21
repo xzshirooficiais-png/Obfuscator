@@ -1,5 +1,7 @@
 from flask import Flask, render_template_string, request, jsonify
 import urllib.request
+import urllib.parse
+import json
 import re
 
 app = Flask(__name__)
@@ -36,7 +38,7 @@ HTML_TEMPLATE = """
             if(!url) return;
             
             resultBox.style.display = 'block';
-            resultBox.innerHTML = 'Processing...';
+            resultBox.innerHTML = 'Bypassing through routing engine...';
 
             try {
                 const res = await fetch('/api/bypass', {
@@ -59,21 +61,44 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def resolve_link(target_url):
+def advanced_bypass(target_url):
+    # Strategy 1: Query public bypass API (e.g., bypass.bot.nu or similar open endpoints)
     try:
+        api_url = f"https://bypass.bot.nu/bypass?url={urllib.parse.quote(target_url)}"
         req = urllib.request.Request(
-            target_url,
+            api_url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            if res_data.get('success') and res_data.get('destination'):
+                return res_data['destination']
+    except Exception:
+        pass
+
+    # Strategy 2: Fallback manual redirect / meta-tag chain tracker
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
             final_url = response.url
-            html_content = response.read().decode('utf-8', errors='ignore')
-            match = re.search(r'window\.location\.href\s*=\s*["\']([^"\']+)["\']', html_content)
-            if match:
-                return match.group(1)
-            return final_url
+            if final_url != target_url:
+                return final_url
+            
+            html = response.read().decode('utf-8', errors='ignore')
+            # Extract target link if embedded via linkvertise target layouts
+            link_match = re.search(r'\"destination\"\s*:\s*\"([^\"]+)\"', html)
+            if link_match:
+                return link_match.group(1).encode().decode('unicode-escape')
+                
+            return "Could not auto-extract destination. Target requires browser execution context."
     except Exception as e:
-        return f"Error resolving link: {str(e)}"
+        return f"Resolution error: {str(e)}"
 
 @app.route('/')
 def index():
@@ -85,7 +110,8 @@ def bypass():
     url = data.get('url', '').strip()
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
-    resolved = resolve_link(url)
+    
+    resolved = advanced_bypass(url)
     return jsonify({'original': url, 'bypassed': resolved})
 
 if __name__ == '__main__':
