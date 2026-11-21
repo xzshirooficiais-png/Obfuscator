@@ -1,9 +1,11 @@
 import base64
 import os
 import re
-import urllib.parse
-import requests
+from urllib.parse import parse_qs, urlparse
+
+from bs4 import BeautifulSoup
 from flask import Flask, jsonify, render_template_string, request
+import requests
 
 app = Flask(__name__)
 
@@ -11,183 +13,167 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/139.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Link Bypasser</title>
     <style>
+        * { box-sizing: border-box; }
         body {
-            background: #0f172a;
-            color: #f8fafc;
-            font-family: system-ui, sans-serif;
-            display: flex;
-            min-height: 100vh;
-            justify-content: center;
-            align-items: center;
             margin: 0;
-            padding: 1rem;
-            box-sizing: border-box;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f1115;
+            color: #eef1f6;
+            font-family: Arial, sans-serif;
+            padding: 16px;
         }
         .card {
-            background: #1e293b;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
             width: 100%;
-            max-width: 520px;
+            max-width: 460px;
+            background: #181c24;
+            border: 1px solid #2b3240;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
         }
-        h2 { margin-top: 0; color: #38bdf8; }
+        h2 {
+            margin: 0 0 16px;
+            font-size: 22px;
+        }
         input {
             width: 100%;
-            padding: 0.75rem;
-            border-radius: 6px;
-            border: 1px solid #475569;
-            background: #0f172a;
-            color: #fff;
-            margin-bottom: 1rem;
-            box-sizing: border-box;
-            font-size: 0.95rem;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #353e50;
+            background: #0f1115;
+            color: #ffffff;
+            font-size: 14px;
+            margin-bottom: 12px;
         }
         button {
-            background: #0284c7;
-            color: white;
-            border: none;
-            padding: 0.75rem 1.5rem;
-            border-radius: 6px;
-            cursor: pointer;
             width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: #7c5cff;
+            color: #ffffff;
+            font-size: 15px;
             font-weight: bold;
-            font-size: 1rem;
+            cursor: pointer;
         }
-        button:hover { background: #0369a1; }
-        button:disabled { background: #475569; cursor: not-allowed; }
-        .result {
-            margin-top: 1.5rem;
+        button:hover {
+            background: #6845f5;
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+        #status {
+            margin-top: 16px;
+            font-size: 14px;
             word-break: break-all;
-            background: #0f172a;
-            padding: 1rem;
-            border-radius: 6px;
-            border: 1px solid #334155;
-            display: none;
             line-height: 1.5;
         }
-        .error { color: #f87171; }
-        .meta { color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem; }
-        a { color: #38bdf8; }
+        a {
+            color: #4ce0b3;
+        }
+        .err {
+            color: #ff6b6b;
+        }
+        .copy-btn {
+            margin-top: 10px;
+            background: #2b3240;
+            font-size: 13px;
+            padding: 8px;
+        }
+        .copy-btn:hover {
+            background: #3a4356;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>Link Bypasser</h2>
-        <input type="text" id="urlInput" placeholder="Paste Linkvertise, LootLabs, or short link here...">
-        <button id="startBtn" onclick="bypassLink()">Start Bypass</button>
-        <div class="result" id="resultBox"></div>
+        <input type="text" id="urlInput" placeholder="Paste your link here..." autocomplete="off">
+        <button id="startBtn" onclick="startBypass()">Start</button>
+        <div id="status"></div>
     </div>
 
     <script>
-        function isValidHttpUrl(str) {
-            return typeof str === 'string' && (str.startsWith('http://') || str.startsWith('https://'));
-        }
-
-        function showSuccess(url, source) {
-            const resultBox = document.getElementById('resultBox');
-            resultBox.innerHTML = '';
-            const label = document.createElement('strong');
-            label.textContent = 'Result: ';
-            const link = document.createElement('a');
-            link.href = url;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = url;
-            const meta = document.createElement('div');
-            meta.className = 'meta';
-            meta.textContent = 'Solved via: ' + source;
-            resultBox.appendChild(label);
-            resultBox.appendChild(link);
-            resultBox.appendChild(meta);
-        }
-
-        function showError(msg) {
-            const resultBox = document.getElementById('resultBox');
-            resultBox.innerHTML = '';
-            const span = document.createElement('span');
-            span.className = 'error';
-            span.textContent = msg;
-            resultBox.appendChild(span);
-        }
-
-        async function clientFallback(targetUrl) {
-            const encoded = encodeURIComponent(targetUrl);
-            const endpoints = [
-                {
-                    name: 'browser -> trw.lat',
-                    url: `https://trw.lat/api/bypass?url=${encoded}&mode=normal`,
-                    extract: (d) => d && d.success && isValidHttpUrl(d.result) ? d.result : null
-                },
-                {
-                    name: 'browser -> bypass.vip',
-                    url: `https://api.bypass.vip/bypass?url=${encoded}`,
-                    extract: (d) => d && d.status === 'success' && isValidHttpUrl(d.result) ? d.result : null
-                }
-            ];
-
-            for (const ep of endpoints) {
-                try {
-                    const res = await fetch(ep.url);
-                    if (!res.ok) continue;
-                    const data = await res.json();
-                    const found = ep.extract(data);
-                    if (found) return { url: found, source: ep.name };
-                } catch (_) {}
-            }
-            return null;
-        }
-
-        async function bypassLink() {
-            const input = document.getElementById('urlInput');
-            const btn = document.getElementById('startBtn');
-            const resultBox = document.getElementById('resultBox');
+        async function startBypass() {
+            const input = document.getElementById("urlInput");
+            const btn = document.getElementById("startBtn");
+            const status = document.getElementById("status");
             const url = input.value.trim();
-            if (!url) return;
+
+            status.textContent = "";
+            if (!url) {
+                status.innerHTML = '<span class="err">Paste a link first.</span>';
+                return;
+            }
 
             btn.disabled = true;
-            resultBox.style.display = 'block';
-            resultBox.textContent = 'Bypassing... (LootLabs and Linkvertise can take 5-20 seconds)';
+            btn.textContent = "Working...";
+            status.textContent = "Checking link...";
 
             try {
-                const res = await fetch('/api/bypass', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                const res = await fetch("/bypass", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ url })
                 });
                 const data = await res.json();
+                status.textContent = "";
 
-                if (isValidHttpUrl(data.bypassed)) {
-                    showSuccess(data.bypassed, data.source || 'server');
-                    return;
+                if (data.success && data.result) {
+                    const label = document.createElement("div");
+                    label.textContent = "Done (" + data.method + "):";
+                    status.appendChild(label);
+
+                    if (data.result.startsWith("http://") || data.result.startsWith("https://")) {
+                        const link = document.createElement("a");
+                        link.href = data.result;
+                        link.target = "_blank";
+                        link.rel = "noopener noreferrer";
+                        link.textContent = data.result;
+                        status.appendChild(link);
+                    } else {
+                        const textOut = document.createElement("div");
+                        textOut.style.color = "#4ce0b3";
+                        textOut.textContent = data.result;
+                        status.appendChild(textOut);
+                    }
+
+                    const copyBtn = document.createElement("button");
+                    copyBtn.className = "copy-btn";
+                    copyBtn.textContent = "Copy Result";
+                    copyBtn.onclick = () => {
+                        navigator.clipboard.writeText(data.result);
+                        copyBtn.textContent = "Copied!";
+                    };
+                    status.appendChild(copyBtn);
+                } else {
+                    const errSpan = document.createElement("span");
+                    errSpan.className = "err";
+                    errSpan.textContent = data.error || "Could not bypass that link.";
+                    status.appendChild(errSpan);
                 }
-
-                resultBox.textContent = 'Server blocked or timed out, trying direct browser fallback...';
-                const direct = await clientFallback(url);
-                if (direct) {
-                    showSuccess(direct.url, direct.source);
-                    return;
-                }
-
-                showError('Bypass failed: ' + (data.error || 'Could not resolve this link right now.'));
-            } catch (err) {
-                showError('Network error: ' + err.message);
+            } catch (e) {
+                status.innerHTML = '<span class="err">Server error. Try again.</span>';
             } finally {
                 btn.disabled = false;
+                btn.textContent = "Start";
             }
         }
     </script>
@@ -196,145 +182,227 @@ HTML_TEMPLATE = """
 """
 
 
-def is_http_url(value):
-    return isinstance(value, str) and value.startswith(("http://", "https://"))
-
-
-def check_base64_param(target_url):
-    parsed = urllib.parse.urlparse(target_url)
-    params = urllib.parse.parse_qs(parsed.query)
-    for key in ("r", "u", "url", "dest"):
-        if key in params and params[key]:
-            raw = params[key][0]
-            if is_http_url(raw):
-                return raw
-            try:
-                padded = raw + "=" * (-len(raw) % 4)
-                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore").strip()
-                if is_http_url(decoded):
-                    return decoded
-            except Exception:
-                pass
-    return None
-
-
-def query_api_engines(target_url):
-    errors = []
-
-    engines = [
-        (
-            "trw.lat",
-            "https://trw.lat/api/bypass",
-            {"url": target_url, "mode": "normal"},
-            HEADERS,
-            lambda d: d.get("result") if d.get("success") else None,
-        ),
-        (
-            "bypass.vip",
-            "https://api.bypass.vip/bypass",
-            {"url": target_url},
-            {**HEADERS, "Origin": "https://bypass.vip", "Referer": "https://bypass.vip/"},
-            lambda d: d.get("result") if d.get("status") == "success" else None,
-        ),
-        (
-            "api.4ndra.com",
-            "https://api.4ndra.com/v1/bypass-ad-link",
-            {"url": target_url},
-            HEADERS,
-            lambda d: d.get("data", {}).get("result") if d.get("success") else None,
-        ),
-        (
-            "dlr.kys.gay",
-            "https://dlr.kys.gay/api/free/bypass",
-            {"url": target_url},
-            HEADERS,
-            lambda d: d.get("result") if d.get("status") == "success" else None,
-        ),
-    ]
-
-    for name, endpoint, params, req_headers, extractor in engines:
-        try:
-            resp = requests.get(endpoint, params=params, headers=req_headers, timeout=25)
-            if resp.status_code != 200:
-                errors.append(f"{name}: HTTP {resp.status_code}")
-                continue
-            payload = resp.json()
-            result = extractor(payload)
-            if is_http_url(result) and result != target_url:
-                return result, name, errors
-            msg = payload.get("result") or payload.get("message") or payload.get("error") or "no result"
-            errors.append(f"{name}: {msg}")
-        except Exception as exc:
-            errors.append(f"{name}: {type(exc).__name__}")
-
-    return None, None, errors
-
-
-def direct_html_fallback(target_url):
+def try_base64_decode(value: str):
+    if not value:
+        return None
+    padded = value.strip() + "=" * (-len(value.strip()) % 4)
     try:
-        resp = requests.get(target_url, headers=HEADERS, allow_redirects=True, timeout=12)
-        if resp.url != target_url and is_http_url(resp.url):
-            return resp.url
-
-        html = resp.text
-        for pattern in (
-            r'window\.location\.href\s*=\s*["\'](https?://[^"\']+)["\']',
-            r'"destination"\s*:\s*"(https?://[^"]+)"',
-        ):
-            match = re.search(pattern, html)
-            if match:
-                candidate = match.group(1).replace("\\/", "/")
-                if is_http_url(candidate):
-                    return candidate
-
-        b64_matches = re.findall(r'aHR0c[A-Za-z0-9+/=]{10,}', html)
-        for chunk in b64_matches:
-            try:
-                padded = chunk + "=" * (-len(chunk) % 4)
-                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
-                if is_http_url(decoded):
-                    return decoded
-            except Exception:
-                pass
+        decoded = base64.b64decode(padded, validate=False).decode("utf-8", errors="ignore").strip()
+        if decoded.startswith(("http://", "https://")):
+            return decoded
+    except Exception:
+        pass
+    try:
+        decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="ignore").strip()
+        if decoded.startswith(("http://", "https://")):
+            return decoded
     except Exception:
         pass
     return None
 
 
-def resolve_link(target_url):
-    direct_param = check_base64_param(target_url)
-    if direct_param:
-        return direct_param, "url-param", []
+def extract_query_redirect(url: str):
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    for key in ("r", "url", "redirect", "target", "dest", "link", "to"):
+        if key in params and params[key]:
+            val = params[key][0]
+            if val.startswith(("http://", "https://")):
+                return val
+            decoded = try_base64_decode(val)
+            if decoded:
+                return decoded
+    return None
 
-    api_result, source, errors = query_api_engines(target_url)
-    if api_result:
-        return api_result, source, errors
 
-    html_result = direct_html_fallback(target_url)
-    if html_result:
-        return html_result, "html-redirect", errors
+def bypass_linkvertise_local(session: requests.Session, url: str):
+    # Check base64 dynamic target first (?r=...)
+    direct = extract_query_redirect(url)
+    if direct:
+        return direct, "linkvertise-dynamic"
 
-    return None, None, errors
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    if len(parts) >= 2 and parts[0].isdigit():
+        user_id, link_slug = parts[0], parts[1]
+        graphql_url = "https://publisher.linkvertise.com/graphql"
+        payload = {
+            "operationName": "getDetailPageContent",
+            "variables": {
+                "url": {"userId": user_id, "linkName": link_slug},
+                "accessToken": "",
+            },
+            "query": (
+                "query getDetailPageContent($url: LinkIdentificationInput!) { "
+                "getDetailPageContent(url: $url) { "
+                "access_token paste_content target_type "
+                "} }"
+            ),
+        }
+        r = session.post(
+            graphql_url,
+            json=payload,
+            headers={**HEADERS, "Origin": "https://linkvertise.com", "Referer": "https://linkvertise.com/"},
+            timeout=12,
+        )
+        if r.ok:
+            data = r.json()
+            content = (data.get("data") or {}).get("getDetailPageContent") or {}
+            if content.get("paste_content"):
+                return content["paste_content"], "linkvertise-paste"
+
+    r = session.get(url, headers=HEADERS, timeout=12)
+    for pattern in (r'"target"\s*:\s*"(https?://[^"]+)"', r'"url"\s*:\s*"(https?://[^"]+)"'):
+        m = re.search(pattern, r.text)
+        if m and "linkvertise" not in m.group(1):
+            return m.group(1).replace("\\/", "/"), "linkvertise-html"
+    return None, None
+
+
+def bypass_plato_local(session: requests.Session, url: str):
+    direct = extract_query_redirect(url)
+    if direct:
+        return direct, "plato-redirect"
+
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    ticket_id = (params.get("id") or params.get("d") or [None])[0]
+
+    # Try standard Platoboost / Platorelay status API
+    if ticket_id:
+        for base_api in (
+            "https://api-gateway.platoboost.com/v1/authenticators/8",
+            "https://api.platorelay.com/v1/sessions/auth",
+        ):
+            try:
+                r = session.get(f"{base_api}/{ticket_id}", headers=HEADERS, timeout=10)
+                if r.ok:
+                    info = r.json()
+                    if isinstance(info, dict):
+                        if info.get("key"):
+                            return info["key"], "plato-key"
+                        if info.get("redirect"):
+                            return info["redirect"], "plato-api"
+            except Exception:
+                continue
+
+    r = session.get(url, headers=HEADERS, allow_redirects=True, timeout=12)
+    if r.url != url and "plato" not in urlparse(r.url).netloc:
+        return r.url, "plato-follow"
+    return None, None
+
+
+def bypass_via_external_api(session: requests.Session, url: str):
+    # Optional custom bypass API from Render Environment Variables
+    custom_api = os.environ.get("BYPASS_API_URL", "").strip()
+    custom_key = os.environ.get("BYPASS_API_KEY", "").strip()
+
+    endpoints = []
+    if custom_api:
+        endpoints.append((custom_api, custom_key))
+    endpoints.extend([
+        ("https://api.bypass.vip/bypass", ""),
+    ])
+
+    for endpoint, api_key in endpoints:
+        try:
+            req_headers = {**HEADERS}
+            if api_key:
+                req_headers["x-api-key"] = api_key
+            r = session.get(endpoint, params={"url": url}, headers=req_headers, timeout=18)
+            if r.ok:
+                data = r.json()
+                for key in ("result", "destination", "bypassed", "url", "key"):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip(), "external-api"
+        except Exception:
+            continue
+    return None, None
+
+
+def bypass_generic(session: requests.Session, url: str):
+    direct = extract_query_redirect(url)
+    if direct:
+        return direct, "query-decode"
+
+    r = session.get(url, headers=HEADERS, allow_redirects=True, timeout=12)
+    if r.url != url:
+        return r.url, "redirect-follow"
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    meta = soup.find("meta", attrs={"http-equiv": re.compile("^refresh$", re.I)})
+    if meta and meta.get("content"):
+        m = re.search(r"url=([^\s;]+)", meta["content"], re.I)
+        if m:
+            return m.group(1).strip("'\""), "meta-refresh"
+
+    for pattern in (
+        r'window\.location(?:\.href)?\s*=\s*["\'](https?://[^"\']+)["\']',
+        r'location\.replace\(\s*["\'](https?://[^"\']+)["\']\s*\)',
+    ):
+        m = re.search(pattern, r.text)
+        if m:
+            return m.group(1), "js-redirect"
+
+    return None, None
+
+
+def run_bypass(url: str):
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    host = urlparse(url).netloc.lower()
+    session = requests.Session()
+
+    if any(d in host for d in ("linkvertise.com", "link-target.net", "direct-link.net", "link-hub.net", "up-to-down.net")):
+        res, method = bypass_linkvertise_local(session, url)
+        if res:
+            return {"success": True, "result": res, "method": method}
+
+    if any(d in host for d in ("platorelay", "platoboost", "deltaios")):
+        res, method = bypass_plato_local(session, url)
+        if res:
+            return {"success": True, "result": res, "method": method}
+
+    if any(d in host for d in ("loot-link", "lootlabs", "lootdest")):
+        res = extract_query_redirect(url)
+        if res:
+            return {"success": True, "result": res, "method": "loot-decode"}
+
+    res, method = bypass_via_external_api(session, url)
+    if res:
+        return {"success": True, "result": res, "method": method}
+
+    res, method = bypass_generic(session, url)
+    if res:
+        return {"success": True, "result": res, "method": method}
+
+    return {
+        "success": False,
+        "error": "Blocked by captcha or Cloudflare. Add a BYPASS_API_URL in Render env settings if needed.",
+    }
 
 
 @app.route("/")
-def index():
-    return render_template_string(HTML_TEMPLATE)
+def home():
+    return render_template_string(HTML_PAGE)
 
 
-@app.route("/api/bypass", methods=["POST"])
-def bypass():
+@app.route("/bypass", methods=["POST"])
+def bypass_route():
     data = request.get_json(silent=True) or {}
-    url = data.get("url", "").strip()
-    if not is_http_url(url):
-        return jsonify({"error": "Enter a full URL starting with http:// or https://"}), 400
+    target_url = (data.get("url") or "").strip()
+    if not target_url:
+        return jsonify({"success": False, "error": "Please paste a link."}), 400
 
-    resolved, source, errors = resolve_link(url)
-    if resolved:
-        return jsonify({"original": url, "bypassed": resolved, "source": source})
-
-    detail_text = " | ".join(errors) if errors else "Target needs full captcha/browser solve."
-    return jsonify({"original": url, "bypassed": None, "error": detail_text}), 200
+    try:
+        output = run_bypass(target_url)
+        return jsonify(output)
+    except requests.Timeout:
+        return jsonify({"success": False, "error": "The target site took too long to answer."}), 504
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"Failed: {exc}"}), 500
 
 
 if __name__ == "__main__":
