@@ -1,8 +1,8 @@
 from flask import Flask, render_template_string, request, jsonify
 import urllib.request
 import urllib.parse
-import json
 import base64
+import json
 import re
 
 app = Flask(__name__)
@@ -62,51 +62,75 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def resolve_target(target_url):
+def deep_resolve(target_url):
     try:
-        # 1. Handle LootLabs base64 'cc' query parameters directly
+        # 1. Base64 / LootLabs Parameter Decoder Check
         parsed_url = urllib.parse.urlparse(target_url)
         query_params = urllib.parse.parse_qs(parsed_url.query)
-        if 'cc' in query_params:
-            cc_val = query_params['cc'][0]
-            padding = 4 - (len(cc_val) % 4)
-            if padding < 4:
-                cc_val += '=' * padding
-            decoded_str = base64.b64decode(cc_val).decode('utf-8', errors='ignore')
-            try:
-                data_json = json.loads(decoded_str)
-                if 'url' in data_json:
-                    return data_json['url']
-                if 'destination' in data_json:
-                    return data_json['destination']
-            except Exception:
-                url_match = re.search(r'https?://[^\s<>"]+', decoded_str)
-                if url_match:
-                    return url_match.group(0)
+        for param in ['cc', 'data', 'token', 'r']:
+            if param in query_params:
+                val = query_params[param][0]
+                padding = 4 - (len(val) % 4)
+                if padding < 4:
+                    val += '=' * padding
+                try:
+                    decoded = base64.b64decode(val).decode('utf-8', errors='ignore')
+                    # Look for embedded urls inside decoded json or plaintext
+                    if '{' in decoded:
+                        j = json.loads(decoded)
+                        for k in ['url', 'destination', 'link', 'target']:
+                            if k in j:
+                                return j[k]
+                    url_match = re.search(r'https?://[^\s<>"]+', decoded)
+                    if url_match and url_match.group(0) != target_url:
+                        return url_match.group(0)
+                except Exception:
+                    pass
 
-        # 2. Query public resolution endpoints for linkvertise / other shorteners
-        endpoints = [
-            f"https://bypass.bot.nu/bypass?url={urllib.parse.quote(target_url)}",
-            f"https://api.bypass.city/bypass?url={urllib.parse.quote(target_url)}"
+        # 2. HTTP Request with Redirect Chaining and Body Scraping
+        req = urllib.request.Request(
+            target_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        )
+        
+        # Custom opener to trace redirect URLs step by step
+        class RedirectFilter(urllib.request.HTTPRedirectHandler):
+            def http_error_302(self, req, fp, code, msg, headers):
+                return super().http_error_302(req, fp, code, msg, headers)
+            def http_error_301(self, req, fp, code, msg, headers):
+                return super().http_error_301(req, fp, code, msg, headers)
+
+        opener = urllib.request.build_opener(RedirectFilter)
+        with opener.open(req, timeout=8) as resp:
+            final_url = resp.url
+            if final_url != target_url and not any(x in final_url for x in ['lootlabs', 'linkvertise', 'ouo.io']):
+                return final_url
+            
+            html = resp.read().decode('utf-8', errors='ignore')
+
+        # 3. Pattern matching inside the HTML response payload
+        # Check window.location or target variables
+        patterns = [
+            r'window\.location\.href\s*=\s*["\']([^"\']+)["\']',
+            r'destination\s*[:=]\s*["\'](https?://[^"\']+)["\']',
+            r'targetUrl\s*[:=]\s*["\'](https?://[^"\']+)["\']',
+            r'content=["\'][^"\']*URL=([^"\']+)["\']'
         ]
         
-        for api in endpoints:
-            try:
-                req = urllib.request.Request(api, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    res_data = json.loads(resp.read().decode('utf-8'))
-                    if res_data.get('success') and res_data.get('destination'):
-                        return res_data['destination']
-            except Exception:
-                continue
+        for pattern in patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                found = match.group(1)
+                if found and not found.startswith('javascript:'):
+                    return found
 
-        # 3. Final fallback: direct HTTP tracking check
-        req_direct = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_direct, timeout=5) as resp:
-            return resp.url
+        return "Could not unwrap target. Page requires browser automation context."
 
     except Exception as e:
-        return f"Extraction failed: {str(e)}"
+        return f"Resolution failure: {str(e)}"
 
 @app.route('/')
 def index():
@@ -119,7 +143,7 @@ def bypass():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
     
-    resolved = resolve_target(url)
+    resolved = deep_resolve(url)
     return jsonify({'original': url, 'bypassed': resolved})
 
 if __name__ == '__main__':
