@@ -1,15 +1,23 @@
+import base64
 import os
 import re
-import json
-import base64
-import urllib.request
 import urllib.parse
-import urllib.error
-from flask import Flask, render_template_string, request, jsonify
+import requests
+from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
-HTML_TEMPLATE = r"""
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/139.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,28 +25,133 @@ HTML_TEMPLATE = r"""
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Link Bypasser</title>
     <style>
-        body { background: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif; display: flex; height: 100vh; justify-content: center; align-items: center; margin: 0; padding: 1rem; box-sizing: border-box; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 100%; max-width: 520px; }
+        body {
+            background: #0f172a;
+            color: #f8fafc;
+            font-family: system-ui, sans-serif;
+            display: flex;
+            min-height: 100vh;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+        .card {
+            background: #1e293b;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 520px;
+        }
         h2 { margin-top: 0; color: #38bdf8; }
-        input { width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; margin-bottom: 1rem; box-sizing: border-box; font-size: 0.95rem; }
-        button { background: #0284c7; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; font-size: 1rem; }
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border-radius: 6px;
+            border: 1px solid #475569;
+            background: #0f172a;
+            color: #fff;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+            font-size: 0.95rem;
+        }
+        button {
+            background: #0284c7;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            font-weight: bold;
+            font-size: 1rem;
+        }
         button:hover { background: #0369a1; }
-        button:disabled { background: #475569; cursor: wait; }
-        .result { margin-top: 1.5rem; word-break: break-all; background: #0f172a; padding: 1rem; border-radius: 6px; border: 1px solid #334155; display: none; line-height: 1.5; }
-        .copy-btn { margin-top: 0.75rem; background: #10b981; padding: 0.5rem 1rem; font-size: 0.85rem; width: auto; }
-        .copy-btn:hover { background: #059669; }
-        .error-text { color: #f87171; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        .result {
+            margin-top: 1.5rem;
+            word-break: break-all;
+            background: #0f172a;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            display: none;
+            line-height: 1.5;
+        }
+        .error { color: #f87171; }
+        .meta { color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem; }
+        a { color: #38bdf8; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>Link Bypasser</h2>
-        <input type="text" id="urlInput" placeholder="Paste Linkvertise, LootLabs, Work.ink link here...">
+        <input type="text" id="urlInput" placeholder="Paste Linkvertise, LootLabs, or short link here...">
         <button id="startBtn" onclick="bypassLink()">Start Bypass</button>
         <div class="result" id="resultBox"></div>
     </div>
 
     <script>
+        function isValidHttpUrl(str) {
+            return typeof str === 'string' && (str.startsWith('http://') || str.startsWith('https://'));
+        }
+
+        function showSuccess(url, source) {
+            const resultBox = document.getElementById('resultBox');
+            resultBox.innerHTML = '';
+            const label = document.createElement('strong');
+            label.textContent = 'Result: ';
+            const link = document.createElement('a');
+            link.href = url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = url;
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = 'Solved via: ' + source;
+            resultBox.appendChild(label);
+            resultBox.appendChild(link);
+            resultBox.appendChild(meta);
+        }
+
+        function showError(msg) {
+            const resultBox = document.getElementById('resultBox');
+            resultBox.innerHTML = '';
+            const span = document.createElement('span');
+            span.className = 'error';
+            span.textContent = msg;
+            resultBox.appendChild(span);
+        }
+
+        async function clientFallback(targetUrl) {
+            const encoded = encodeURIComponent(targetUrl);
+            const endpoints = [
+                {
+                    name: 'browser -> trw.lat',
+                    url: `https://trw.lat/api/bypass?url=${encoded}&mode=normal`,
+                    extract: (d) => d && d.success && isValidHttpUrl(d.result) ? d.result : null
+                },
+                {
+                    name: 'browser -> bypass.vip',
+                    url: `https://api.bypass.vip/bypass?url=${encoded}`,
+                    extract: (d) => d && d.status === 'success' && isValidHttpUrl(d.result) ? d.result : null
+                }
+            ];
+
+            for (const ep of endpoints) {
+                try {
+                    const res = await fetch(ep.url);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    const found = ep.extract(data);
+                    if (found) return { url: found, source: ep.name };
+                } catch (_) {}
+            }
+            return null;
+        }
+
         async function bypassLink() {
             const input = document.getElementById('urlInput');
             const btn = document.getElementById('startBtn');
@@ -47,9 +160,8 @@ HTML_TEMPLATE = r"""
             if (!url) return;
 
             btn.disabled = true;
-            btn.textContent = 'Bypassing...';
             resultBox.style.display = 'block';
-            resultBox.innerHTML = 'Working on it, hold on a few seconds...';
+            resultBox.textContent = 'Bypassing... (LootLabs and Linkvertise can take 5-20 seconds)';
 
             try {
                 const res = await fetch('/api/bypass', {
@@ -59,26 +171,24 @@ HTML_TEMPLATE = r"""
                 });
                 const data = await res.json();
 
-                if (data.success && data.bypassed) {
-                    const safeUrl = data.bypassed.replace(/"/g, '&quot;');
-                    resultBox.innerHTML = `
-                        <strong>Result (${data.engine}):</strong><br>
-                        <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="color: #38bdf8;">${data.bypassed}</a><br>
-                        <button class="copy-btn" onclick="copyResult('${safeUrl}')">Copy Link</button>
-                    `;
-                } else {
-                    resultBox.innerHTML = `<span class="error-text"><strong>Failed:</strong> ${data.error || 'Could not bypass this link.'}</span>`;
+                if (isValidHttpUrl(data.bypassed)) {
+                    showSuccess(data.bypassed, data.source || 'server');
+                    return;
                 }
+
+                resultBox.textContent = 'Server blocked or timed out, trying direct browser fallback...';
+                const direct = await clientFallback(url);
+                if (direct) {
+                    showSuccess(direct.url, direct.source);
+                    return;
+                }
+
+                showError('Bypass failed: ' + (data.error || 'Could not resolve this link right now.'));
             } catch (err) {
-                resultBox.innerHTML = `<span class="error-text"><strong>Error:</strong> Could not reach server.</span>`;
+                showError('Network error: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Start Bypass';
             }
-        }
-
-        function copyResult(text) {
-            navigator.clipboard.writeText(text);
         }
     </script>
 </body>
@@ -86,121 +196,125 @@ HTML_TEMPLATE = r"""
 """
 
 
-def safe_get_json(url, headers, timeout=20):
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore").strip()
-            if raw.startswith("{"):
-                return resp.status, json.loads(raw), raw
-            return resp.status, None, raw
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="ignore").strip()
-        if raw.startswith("{"):
+def is_http_url(value):
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def check_base64_param(target_url):
+    parsed = urllib.parse.urlparse(target_url)
+    params = urllib.parse.parse_qs(parsed.query)
+    for key in ("r", "u", "url", "dest"):
+        if key in params and params[key]:
+            raw = params[key][0]
+            if is_http_url(raw):
+                return raw
             try:
-                return e.code, json.loads(raw), raw
+                padded = raw + "=" * (-len(raw) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore").strip()
+                if is_http_url(decoded):
+                    return decoded
             except Exception:
                 pass
-        return e.code, None, raw
-    except Exception as e:
-        return 0, None, str(e)
+    return None
 
 
-def decode_lootlabs_xor(encoded_str, key_length=5):
-    try:
-        padding = 4 - (len(encoded_str) % 4)
-        if padding < 4:
-            encoded_str += "=" * padding
-        raw_bytes = base64.b64decode(encoded_str)
-        raw_text = raw_bytes.decode("latin-1")
-        key = raw_text[:key_length]
-        body = raw_text[key_length:]
-        out = "".join(
-            chr(ord(body[i]) ^ ord(key[i % len(key)]))
-            for i in range(len(body))
-        )
-        return urllib.parse.unquote(out)
-    except Exception:
-        return None
-
-
-def resolve_target(target_url):
-    encoded_target = urllib.parse.quote(target_url, safe="")
+def query_api_engines(target_url):
     errors = []
 
-    # 1. TRW API (keyless public bypass endpoint for Linkvertise, LootLabs, Work.ink, Platoboost)
-    trw_url = f"https://trw.lat/api/bypass?url={encoded_target}&mode=normal"
-    trw_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": "https://rip.linkvertise.lol/",
-        "Origin": "https://rip.linkvertise.lol",
-    }
-    status, data, raw = safe_get_json(trw_url, trw_headers, timeout=25)
-    if data:
-        if data.get("success") is True and isinstance(data.get("result"), str):
-            res = data["result"].strip()
-            if res.startswith(("http://", "https://")):
-                return True, res, "trw.lat"
-            return True, res, "trw.lat"
-        if data.get("result"):
-            errors.append(f"TRW: {data['result']}")
-    else:
-        errors.append(f"TRW HTTP {status}")
+    engines = [
+        (
+            "trw.lat",
+            "https://trw.lat/api/bypass",
+            {"url": target_url, "mode": "normal"},
+            HEADERS,
+            lambda d: d.get("result") if d.get("success") else None,
+        ),
+        (
+            "bypass.vip",
+            "https://api.bypass.vip/bypass",
+            {"url": target_url},
+            {**HEADERS, "Origin": "https://bypass.vip", "Referer": "https://bypass.vip/"},
+            lambda d: d.get("result") if d.get("status") == "success" else None,
+        ),
+        (
+            "api.4ndra.com",
+            "https://api.4ndra.com/v1/bypass-ad-link",
+            {"url": target_url},
+            HEADERS,
+            lambda d: d.get("data", {}).get("result") if d.get("success") else None,
+        ),
+        (
+            "dlr.kys.gay",
+            "https://dlr.kys.gay/api/free/bypass",
+            {"url": target_url},
+            HEADERS,
+            lambda d: d.get("result") if d.get("status") == "success" else None,
+        ),
+    ]
 
-    # 2. Bypass.vip official API subdomain
-    vip_url = f"https://api.bypass.vip/bypass?url={encoded_target}"
-    vip_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Origin": "https://bypass.vip",
-        "Referer": "https://bypass.vip/",
-    }
-    status, data, raw = safe_get_json(vip_url, vip_headers, timeout=20)
-    if data:
-        if data.get("status") == "success" and isinstance(data.get("result"), str):
-            res = data["result"].strip()
-            if res.startswith(("http://", "https://")):
-                return True, res, "bypass.vip"
-        if data.get("message"):
-            errors.append(f"VIP: {data['message']}")
-    else:
-        errors.append(f"VIP HTTP {status}")
+    for name, endpoint, params, req_headers, extractor in engines:
+        try:
+            resp = requests.get(endpoint, params=params, headers=req_headers, timeout=25)
+            if resp.status_code != 200:
+                errors.append(f"{name}: HTTP {resp.status_code}")
+                continue
+            payload = resp.json()
+            result = extractor(payload)
+            if is_http_url(result) and result != target_url:
+                return result, name, errors
+            msg = payload.get("result") or payload.get("message") or payload.get("error") or "no result"
+            errors.append(f"{name}: {msg}")
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}")
 
-    # 3. Direct URL param & page scrape fallback (simple shorteners + LootLabs PUBLISHER_LINK)
+    return None, None, errors
+
+
+def direct_html_fallback(target_url):
     try:
-        parsed = urllib.parse.urlparse(target_url)
-        qs = urllib.parse.parse_qs(parsed.query)
-        if "cc" in qs:
-            padding = 4 - (len(qs["cc"][0]) % 4)
-            val = qs["cc"][0] + ("=" * padding if padding < 4 else "")
-            decoded = base64.b64decode(val).decode("utf-8", errors="ignore")
-            match = re.search(r'https?://[^\s"\'<>]+', decoded)
+        resp = requests.get(target_url, headers=HEADERS, allow_redirects=True, timeout=12)
+        if resp.url != target_url and is_http_url(resp.url):
+            return resp.url
+
+        html = resp.text
+        for pattern in (
+            r'window\.location\.href\s*=\s*["\'](https?://[^"\']+)["\']',
+            r'"destination"\s*:\s*"(https?://[^"]+)"',
+        ):
+            match = re.search(pattern, html)
             if match:
-                return True, match.group(0), "direct-decode"
+                candidate = match.group(1).replace("\\/", "/")
+                if is_http_url(candidate):
+                    return candidate
 
-        req = urllib.request.Request(
-            target_url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.url != target_url and not any(
-                d in resp.url for d in ("lootlabs", "linkvertise", "work.ink", "platorelay")
-            ):
-                return True, resp.url, "redirect"
+        b64_matches = re.findall(r'aHR0c[A-Za-z0-9+/=]{10,}', html)
+        for chunk in b64_matches:
+            try:
+                padded = chunk + "=" * (-len(chunk) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+                if is_http_url(decoded):
+                    return decoded
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
 
-            html = resp.read().decode("utf-8", errors="ignore")
-            pub_match = re.search(r'PUBLISHER_LINK\s*=\s*["\']([^"\']+)["\']', html)
-            if pub_match:
-                decoded_pub = decode_lootlabs_xor(pub_match.group(1))
-                if decoded_pub and decoded_pub.startswith(("http://", "https://")):
-                    return True, decoded_pub, "lootlabs-xor"
-    except Exception as e:
-        errors.append(f"Direct: {str(e)}")
 
-    return False, " | ".join(errors) if errors else "No engine could bypass this link.", "none"
+def resolve_link(target_url):
+    direct_param = check_base64_param(target_url)
+    if direct_param:
+        return direct_param, "url-param", []
+
+    api_result, source, errors = query_api_engines(target_url)
+    if api_result:
+        return api_result, source, errors
+
+    html_result = direct_html_fallback(target_url)
+    if html_result:
+        return html_result, "html-redirect", errors
+
+    return None, None, errors
 
 
 @app.route("/")
@@ -212,20 +326,15 @@ def index():
 def bypass():
     data = request.get_json(silent=True) or {}
     url = data.get("url", "").strip()
-    if not url:
-        return jsonify({"success": False, "error": "Please paste a link first."}), 400
+    if not is_http_url(url):
+        return jsonify({"error": "Enter a full URL starting with http:// or https://"}), 400
 
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    resolved, source, errors = resolve_link(url)
+    if resolved:
+        return jsonify({"original": url, "bypassed": resolved, "source": source})
 
-    ok, output, engine = resolve_target(url)
-    return jsonify({
-        "success": ok,
-        "original": url,
-        "bypassed": output if ok else None,
-        "error": None if ok else output,
-        "engine": engine,
-    })
+    detail_text = " | ".join(errors) if errors else "Target needs full captcha/browser solve."
+    return jsonify({"original": url, "bypassed": None, "error": detail_text}), 200
 
 
 if __name__ == "__main__":
